@@ -11,6 +11,9 @@ npm run setup
 # Development server (Turbopack)
 npm run dev
 
+# Development server in background (logs to logs.txt)
+npm run dev:daemon
+
 # Build
 npm run build
 
@@ -25,11 +28,21 @@ npx vitest run src/lib/__tests__/file-system.test.ts
 
 # Reset database
 npm run db:reset
+
+# Regenerate Prisma client after schema changes
+npx prisma generate
+
+# Run migrations after schema changes
+npx prisma migrate dev
 ```
 
 ## Environment
 
-Copy `.env` and set `ANTHROPIC_API_KEY`. Without it, the app runs using `MockLanguageModel` (defined in `src/lib/provider.ts`) which returns static component code.
+Copy `.env` and set:
+- `ANTHROPIC_API_KEY` — required for real AI generation; without it the app uses `MockLanguageModel` (`src/lib/provider.ts`) which returns static component code
+- `JWT_SECRET` — secret for signing JWT session cookies; defaults to `"development-secret-key"` if unset
+
+The dev/build scripts require `node-compat.cjs` (via `NODE_OPTIONS='--require ./node-compat.cjs'`) to remove Node 25's experimental Web Storage globals that break SSR.
 
 ## Architecture
 
@@ -52,11 +65,19 @@ UIGen is a Next.js 15 (App Router) app where users describe React components in 
 - **`ChatContext`**: Wraps Vercel AI SDK's `useChat`, wires up `onToolCall` to `handleToolCall`, and passes serialized file system as request body.
 - **JSX transformer** (`src/lib/transform/jsx-transformer.ts`): Uses `@babel/standalone` to compile JSX/TSX in-browser. Resolves virtual file imports via blob URL import maps injected into the iframe.
 - **AI Provider** (`src/lib/provider.ts`): Returns `anthropic("claude-haiku-4-5")` when `ANTHROPIC_API_KEY` is set, otherwise `MockLanguageModel`.
-- **AI Tools** (`src/lib/tools/`): `str_replace_editor` (create/str_replace/insert/view commands) and `file_manager` (rename/delete/list commands) operate on the server-side `VirtualFileSystem` instance.
+- **AI Tools** (`src/lib/tools/`): `str_replace_editor` (create/str_replace/insert/view commands) and `file_manager` (rename/delete/list commands) operate on the server-side `VirtualFileSystem` instance. The `undo_edit` command is intentionally unsupported — use `str_replace` to revert changes.
+
+### AI-Generated Component Conventions
+
+The system prompt (`src/lib/prompts/generation.tsx`) instructs Claude to follow these rules when generating components:P
+- Every project must have a root `/App.jsx` as the entry point with a default export
+- Style with Tailwind CSS only — no hardcoded styles
+- Local file imports must use the `@/` alias (e.g., `import Foo from '@/components/Foo'`), which maps to the virtual FS root `/`
+- Do not create HTML files; `/App.jsx` is the sole entry point
 
 ### Database
 
-The database schema is defined in `prisma/schema.prisma`. Reference it whenever you need to understand the structure of data stored in the database.
+The database schema is defined in `prisma/schema.prisma`. The Prisma client is generated to `src/generated/prisma` (non-default location — specified in `generator client` block). Reference the schema whenever you need to understand stored data structure.
 
 ### Auth & Persistence
 
@@ -67,7 +88,7 @@ The database schema is defined in `prisma/schema.prisma`. Reference it whenever 
 
 ### Preview Rendering
 
-The `PreviewFrame` uses `iframe.srcdoc` with an import map. Entry point is auto-detected (prefers `/App.jsx`, then `/App.tsx`, `/index.jsx`, etc.). Tailwind CSS v4 is injected via CDN into the iframe.
+The `PreviewFrame` uses `iframe.srcdoc` with an import map. Entry point is auto-detected (prefers `/App.jsx`, then `/App.tsx`, `/index.jsx`, `/index.tsx`, `/src/App.jsx`, `/src/App.tsx`). Tailwind CSS is injected via CDN (`cdn.tailwindcss.com`). Third-party npm packages imported in generated code are resolved automatically from `esm.sh` (e.g., `import confetti from 'canvas-confetti'` just works). Missing local imports get stub placeholder modules to prevent crashes.
 
 ## Code Style
 
